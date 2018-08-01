@@ -52,7 +52,7 @@ router.delete('/:id', (req, res) => {
 //path and item id matches in updated item object match. if problems log 
 //error and send 400, otherwise call update
 router.put('/:id', jsonParser, (req, res) => {
-    const requiredFields = ['title', 'content', 'author'];
+    const requiredFields = ['title', 'content', 'author', 'id'];
     for (let i=0; i<requiredFields.length; i++) {
         const field = requiredFields[i];
         if (!(field in req.body)) {
