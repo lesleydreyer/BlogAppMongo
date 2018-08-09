@@ -1,154 +1,169 @@
 const express = require('express');
 const morgan = require('morgan');
+const mongoose = require('mongoose');
+
+//Mongoose internally uses a promise-like object,
+//but it's better to make Monguoose user built in es6 promises
+mongoose.Promise = global.Promise;
+
+//config.js is where we control constants for entire 
+//app like PORT and DATABASE_URL
+const {PORT, DATABASE_URL} = require ('./config');
+const {BlogPost} = require('./models');
 
 const app = express();
+app.use(express.json());
 
-const blogPostRouter = require('./blogPostsRouter');
+//const blogPostRouter = require('./blogPostsRouter');
 
 // log the http layer
 app.use(morgan('common'));
 
-app.use(express.static('public'));
-//app.use(express.json());
-app.use("/blog-posts", blogPostRouter);
+//app.use(express.static('public'));
+//app.use("/blog-posts", blogPostRouter);
 
-app.get('/', (req, res) => {
-    res.sendFile(__dirname + '/views/index.html');
+app.get('/posts', (req, res) => {
+    //res.sendFile(__dirname + '/views/index.html');
+    BlogPost
+        .find()
+        .then(posts => {
+            res.json({
+                posts: posts.map(post => post.serialize())
+            });
+        })
+        .catch(err => {
+            console.error(err);
+            res.status(500).json({ message: "Internal server error"});
+        });
+});
+app.get("/posts/:id", (res, req) => {
+    BlogPost
+    //this is a conveninece method Mongoose provides for
+    //searching by the  object _id property
+    .findById(req.params.id)
+    .then(post => res.json(post.serialize()))
+    .catch(err => {
+        console.error(err);
+        res.status(500).json({ message: "Interal server error" });
+    });
 });
 
-//when requests come into /blog-posts, route them to express router
-//instances we've imported that will act as modular, mini-express apps
-app.use('/blog-posts', blogPostRouter);
-
-
-// this function starts our server and returns a Promise.
-// In our test code, we need a way of asynchrnously starting
-// our server, since we'll be dealing with promises there.
-function runServer() {
-    const port = process.env.PORT || 8080;
-    return new Promise((resolve, reject) => {
-      app.listen(port, () => {
-        console.log(`Your app is listening on port ${port}`);
-        resolve();
-      })
-      .on('error', err => {
-        reject(err);
-      });
+app.post("/posts", (req, res) => {
+    const requiredFields = ["title", "content", "author"];
+    for (let i=0; i<requiredFields.length; i++) {
+        const field = requiredFields[i];
+        if (!(field in req.body)) {
+            const message = `Missing \`${field}\` in request body`;
+            console.error(message);
+            return res.status(400).send(message);
+        }
+    }
+    
+    BlogPost
+        .create({
+            title: req.body.title,
+            content: req.body.content, 
+            author: req.body.author 
+            //publishDate: req.body.publishDate
+        })
+        .then(post => res.status(201).json(post.serialize()))
+        .catch(err => {
+            console.error(err);
+            res.status(500).json({ message: "Internal server error"});
     });
-  }
+});
 
-// both runServer and closeServer need to access the same
-// server object, so we declare `server` here, and then when
-// runServer runs, it assigns a value.
+app.put("/posts/:id", (req, res) => {
+    //ensure id in req path and req body match
+    if (!(req.params.id && req.body.id && req.params.id === req.body.id)) {
+        const message = 
+            `Request path id (${req.params.id}) and request body id ` +
+            `(${req.body.id}) must match`;
+        console.error(message);
+        return res.status(400).json({ message: message });
+    }
+
+    //we only support a subset of fields being updateable.
+    //if the user sent over any of the updateable fields,
+    //we update those values in document
+    const toUpdate = {};
+    const updateableFields = ["title", "content", "author"];
+
+    updateableFields.forEach(field => {
+        if (field in req.body) {
+            toUpdate[field] = req.body[field];
+        }
+    });
+
+    BlogPost
+    //all key/value pairs in toUpdate will update is what $set does
+        .findbyIdAndUpdate(req.params.id, { $set: toUpdate })
+        .then(post => res.status(204).end())
+        .catch(err => res.status(500).json({ message: "Internal server error"}));
+
+});
+
+app.delete("/post/:id", (req, res) => {
+    BlogPost
+        .findByIdAndRemove(req.params.id)
+        .then(post => res.status(204).end())
+        .catch(err => res.status(500).json({ message: "Internal server error" }));
+});
+
+//catch-all endpoint if client makes request to non-existent endpoint
+app.use("*", function(req, res) {
+    res.status(404).json({ message: "Not found" });
+});
+
+//closeServer needs access to aserver object, but that only
+//gets created when `runServer` runs, so we declare `server`
+//here and then assign a value to it in run
 let server;
 
-// like `runServer`, this function also needs to return a promise.
-// `server.close` does not return a promise on its own, so we manually
-// create one.
-function closeServer() {
+//function to connect to database, then start server
+function runServer(databaseUrl, port = PORT) {
     return new Promise((resolve, reject) => {
-      console.log("Closing server");
-      server.close(err => {
-        if (err) {
-          reject(err);
-          // so we don't also call `resolve()`
-          return;
-        }
-        resolve();
-      });
+        mongoose.connect(
+            databaseUrl,
+            err => {
+                if (err) {
+                    return reject(err);
+                }
+                server = app
+                    .listen(port, () => {
+                        console.log(`Your app is listening on port ${port}`);
+                        resolve();
+                    })
+                    .on("error", err => {
+                        mongoose.disconnect();
+                        reject(err);
+                    });
+            });
     });
-  }
-  
-  // if server.js is called directly (aka, with `node server.js`), this block
-  // runs. but we also export the runServer command so other code (for instance, test code) can start the server as needed.
-  if (require.main === module) {
-    runServer().catch(err => console.error(err));
-  }
-  
-  module.exports = { app, runServer, closeServer };
-  
+}
 
-/////////////////////
-
-
-
-/*const express = require('express');
-const router = express.Router();
-const morgan = require('morgan');
-const bodyParser = require('body-parser');
-
-const {BlogPosts} = require('./models');
-
-const jsonParser = bodyParser.json();
-const app = express();
-
-// log the http layer
-app.use(morgan('common'));
-
-//add some items so there's some data to look at
-BlogPosts.create('The Best Tacos in the East Valley', 
-                'There are several delicious taco joints but I think the best ones are Ghett yo Taco, Barrio Queen and Joyride', 
-                'Lesley Dreyer', 
-                1519129853500);
-BlogPosts.create('What Shows to Watch this Summer', 
-                'I would watch Code Black, Glow, Whose Line is it Anyway and Castlerock', 
-                'Lesley Dreyer', 
-                1519129853600);
-
-//when root of router called with GET, return all current BlogPosts items                
-app.get('/blog-posts', (req, res) => {
-    res.json(BlogPosts.get());
-});
-
-app.post('/blog-posts', jsonParser, (req, res) => {
-    //ensure correct fields in request body
-    const requiredFields = ['title', 'content', 'author', 'publishDate'];
-    for (let i=0; i<requiredFields.length; i++) {
-        const field = requiredFields[i];
-        if (!(field in req.body)) {
-            const message = `Missing \`${field}\` in request body`;
-            console.error(message);
-            return res.status(400).send(message);
-        }
-    }
-    const item = BlogPosts.create(req.body.title, req.body.content, req.body.author, req.body.publishDate);
-    res.status(201).json(item);
-});
-
-app.delete('/blog-posts/:id', (req, res) => {
-    BlogPosts.delete(req.params.id);
-    console.log(`Deleted blog post item \`${req.params.ID}\``);
-    res.status(204).end();
-});
-
-app.put('/blog-posts/:id', jsonParser, (req, res) => {
-    const requiredFields = ['title', 'content', 'author', 'publishDate'];
-    for (let i=0; i<requiredFields.length; i++) {
-        const field = requiredFields[i];
-        if (!(field in req.body)) {
-            const message = `Missing \`${field}\` in request body`;
-            console.error(message);
-            return res.status(400).send(message);
-        }
-    }
-    if (req.params.id != req.body.id) {
-        const message = `Request path id (${req.params.id}) and request body id (${req.body.id}) must match`;
-        console.error(message);
-        return res.status(400).send(message);
-    }
-    console.log(`Updating blog post item \`${req.params.id}\``);
-
-    BlogPosts.update({
-        id: req.params.id,
-        title: req.body.title,
-        content: req.body.content,
-        author: req.body.author,
-        publishDate: req.body.publishDate
+//this function closes the server and returns a promise
+//to use in integration tests later
+function closeServer() {
+    return mongoose.disconnect().then(() => {
+        return new Promise((resolve, reject) => {
+            console.log("Closing server");
+            server.close(err => {
+                if (err) {
+                    return reject(err);
+                }
+                resolve();
+            });
+        });
     });
+}
 
-    res.status(204).end();
-});
+//if server.js is called directly (node server.js)
+//this runs but also export the runserver command so other
+//code like test code can start server
+if (require.main === module) {
+    runServer(DATABASE_URL).catch(err => console.error(err));
+}
 
-app.listen(process.env.PORT || 8080, () => {
-    console.log(`Your app is listening on port ${process.env.PORT || 8080}`);
-});*/
+module.exports = { app, runServer, closeServer };
+
